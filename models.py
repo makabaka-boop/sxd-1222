@@ -174,6 +174,7 @@ class AnomalyTicket(Base):
     disposed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     disposed_at = Column(DateTime(timezone=True), nullable=True)
     review_id = Column(Integer, ForeignKey("review_records.id"), nullable=True)
+    disposition_conclusion = Column(Text, nullable=True)
     risk_level = Column(String(20), nullable=True)
     final_disposition = Column(String(50), nullable=True)
     review_remark = Column(Text, nullable=True)

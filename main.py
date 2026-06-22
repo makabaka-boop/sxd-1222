@@ -128,7 +128,7 @@ def format_ticket_response(ticket: AnomalyTicket, db: Session) -> dict:
         "disposer_name": None,
         "disposed_at": ticket.disposed_at,
         "review_id": ticket.review_id,
-        "disposition_conclusion": None,
+        "disposition_conclusion": ticket.disposition_conclusion,
         "risk_level": ticket.risk_level,
         "retest_capacity": None,
         "final_disposition": ticket.final_disposition,
@@ -315,7 +315,7 @@ def list_batteries(
     return query.order_by(Battery.id.desc()).offset(skip).limit(limit).all()
 
 
-@app.get("/api/batteries/{battery_id}", response_model=BatteryResponse, tags=["电池管理"])
+@app.get("/api/batteries/{battery_id}", tags=["电池管理"])
 def get_battery(
     battery_id: int,
     db: Session = Depends(get_db),
@@ -324,7 +324,16 @@ def get_battery(
     battery = db.query(Battery).filter(Battery.id == battery_id).first()
     if not battery:
         raise HTTPException(status_code=404, detail="电池不存在")
-    return battery
+    anomaly_tickets_raw = db.query(AnomalyTicket).filter(
+        AnomalyTicket.battery_id == battery_id
+    ).order_by(AnomalyTicket.created_at.desc()).all()
+    anomaly_tickets = [
+        format_ticket_response(t, db) for t in anomaly_tickets_raw
+    ]
+    return {
+        "battery": battery,
+        "anomaly_tickets": anomaly_tickets
+    }
 
 
 @app.put("/api/batteries/{battery_id}", response_model=BatteryResponse, tags=["电池管理"])
@@ -507,11 +516,20 @@ def create_preflight_check(
             fail_reasons.append("固件检查不通过")
         if check_data.has_bulge:
             fail_reasons.append("检测到鼓包")
-        create_anomaly_ticket(
-            db, battery, AnomalySource.PREFLIGHT_FAIL,
-            f"飞前核验不通过：{'; '.join(fail_reasons)}",
-            current_user.id
-        )
+        if not check_data.has_bulge and fail_reasons:
+            create_anomaly_ticket(
+                db, battery, AnomalySource.PREFLIGHT_FAIL,
+                f"飞前核验不通过：{'; '.join(fail_reasons)}",
+                current_user.id
+            )
+        elif check_data.has_bulge and fail_reasons:
+            non_bulge_reasons = [r for r in fail_reasons if r != "检测到鼓包"]
+            if non_bulge_reasons:
+                create_anomaly_ticket(
+                    db, battery, AnomalySource.PREFLIGHT_FAIL,
+                    f"飞前核验不通过：{'; '.join(non_bulge_reasons)}",
+                    current_user.id
+                )
     battery.updated_at = datetime.utcnow()
     db.add(record)
     db.commit()
@@ -825,6 +843,7 @@ def review_anomaly_ticket(
     db.add(review_record)
     db.flush()
     ticket.review_id = review_record.id
+    ticket.disposition_conclusion = data.disposition_conclusion
     ticket.risk_level = data.risk_level.value
     ticket.final_disposition = data.final_disposition.value
     ticket.review_remark = data.review_remark
