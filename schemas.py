@@ -290,3 +290,73 @@ class ValidationWarning(BaseModel):
     battery_id: Optional[int] = None
     battery_code: Optional[str] = None
     details: Optional[str] = None
+
+
+class AnomalySource(str, Enum):
+    PREFLIGHT_FAIL = "飞前核验不通过"
+    TEMP_ABNORMAL = "连续温度异常"
+    BULGE = "鼓包"
+    DEACTIVATION_SUGGESTION = "停用建议"
+    CYCLE_EXCEEDED = "循环超阈值"
+    CAPACITY_DECAY = "容量衰减"
+
+
+class AnomalyTicketStatus(str, Enum):
+    PENDING = "待处理"
+    DISPOSED = "待复核"
+    COMPLETED = "已完成"
+    CANCELLED = "已取消"
+
+
+class SiteDisposalCreate(BaseModel):
+    ticket_id: int
+    site_disposal_note: str
+
+
+class AnomalyReviewCreate(BaseModel):
+    ticket_id: int
+    disposition_conclusion: str
+    risk_level: RiskLevel
+    retest_capacity: float
+    final_disposition: Disposition
+    review_remark: Optional[str] = None
+
+
+class AnomalyTicketResponse(BaseModel):
+    id: int
+    ticket_no: str
+    battery_id: int
+    battery_code: str
+    anomaly_source: str
+    trigger_reason: str
+    battery_status_at_creation: str
+    responsible_group: str
+    submitter_id: int
+    submitter_name: Optional[str] = None
+    status: str
+    site_disposal_note: Optional[str] = None
+    disposed_by: Optional[int] = None
+    disposer_name: Optional[str] = None
+    disposed_at: Optional[datetime] = None
+    review_id: Optional[int] = None
+    disposition_conclusion: Optional[str] = None
+    risk_level: Optional[str] = None
+    retest_capacity: Optional[float] = None
+    final_disposition: Optional[str] = None
+    review_remark: Optional[str] = None
+    reviewed_by: Optional[int] = None
+    reviewer_name: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AnomalyTicketStats(BaseModel):
+    pending_count: int
+    disposed_count: int
+    completed_count: int
+    cancelled_count: int
+    risk_level_counts: dict

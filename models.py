@@ -63,6 +63,7 @@ class Battery(Base):
     preflight_checks = relationship("PreFlightCheck", back_populates="battery")
     temperature_records = relationship("TemperatureRecord", back_populates="battery")
     reviews = relationship("ReviewRecord", back_populates="battery")
+    anomaly_tickets = relationship("AnomalyTicket", back_populates="battery", foreign_keys="AnomalyTicket.battery_id")
 
 
 class ChargeRecord(Base):
@@ -155,3 +156,34 @@ class ReviewRecord(Base):
 
     battery = relationship("Battery", back_populates="reviews")
     creator = relationship("User", foreign_keys=[created_by], back_populates="reviews_created")
+
+
+class AnomalyTicket(Base):
+    __tablename__ = "anomaly_tickets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ticket_no = Column(String(30), unique=True, index=True, nullable=False)
+    battery_id = Column(Integer, ForeignKey("batteries.id"), nullable=False)
+    anomaly_source = Column(String(50), nullable=False)
+    trigger_reason = Column(Text, nullable=False)
+    battery_status_at_creation = Column(String(30), nullable=False)
+    responsible_group = Column(String(100), nullable=False)
+    submitter_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    status = Column(String(30), nullable=False, default="待处理")
+    site_disposal_note = Column(Text, nullable=True)
+    disposed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    disposed_at = Column(DateTime(timezone=True), nullable=True)
+    review_id = Column(Integer, ForeignKey("review_records.id"), nullable=True)
+    risk_level = Column(String(20), nullable=True)
+    final_disposition = Column(String(50), nullable=True)
+    review_remark = Column(Text, nullable=True)
+    reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    battery = relationship("Battery", back_populates="anomaly_tickets")
+    submitter = relationship("User", foreign_keys=[submitter_id])
+    disposer = relationship("User", foreign_keys=[disposed_by])
+    reviewer = relationship("User", foreign_keys=[reviewed_by])
+    review_record = relationship("ReviewRecord", foreign_keys=[review_id])
