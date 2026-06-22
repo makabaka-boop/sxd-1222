@@ -206,9 +206,18 @@ def list_batteries(
     if date_to:
         query = query.filter(Battery.created_at <= date_to)
     if risk_level:
-        subquery = db.query(ReviewRecord.battery_id).filter(
-            ReviewRecord.risk_level == risk_level
-        ).distinct()
+        from sqlalchemy import func as sa_func
+        latest_review_subq = db.query(
+            ReviewRecord.battery_id,
+            sa_func.max(ReviewRecord.review_time).label("latest_time")
+        ).group_by(ReviewRecord.battery_id).subquery()
+        subquery = db.query(ReviewRecord.battery_id).join(
+            latest_review_subq,
+            and_(
+                ReviewRecord.battery_id == latest_review_subq.c.battery_id,
+                ReviewRecord.review_time == latest_review_subq.c.latest_time
+            )
+        ).filter(ReviewRecord.risk_level == risk_level)
         query = query.filter(Battery.id.in_(subquery))
     return query.order_by(Battery.id.desc()).offset(skip).limit(limit).all()
 
@@ -323,6 +332,7 @@ def record_discharge_test(
         discharge_capacity=discharge_data.discharge_capacity,
         temperature=discharge_data.temperature,
         duration_minutes=discharge_data.duration_minutes,
+        cycles_at_test=battery.current_cycles,
         created_by=current_user.id
     )
     battery.current_capacity = discharge_data.discharge_capacity
@@ -342,21 +352,17 @@ def create_preflight_check(
     battery = db.query(Battery).filter(Battery.id == check_data.battery_id).first()
     if not battery:
         raise HTTPException(status_code=404, detail="电池不存在")
-    if check_active_verification_conflict(db, check_data.battery_id):
-        raise HTTPException(
-            status_code=400,
-            detail="该电池已有活跃的核验流程，不可重复进入核验"
-        )
-    all_checks_ok = (
-        check_data.appearance_ok and check_data.connector_ok and
-        check_data.firmware_ok and not check_data.has_bulge
-    )
     db.query(PreFlightCheck).filter(
         and_(
             PreFlightCheck.battery_id == check_data.battery_id,
             PreFlightCheck.is_active == True
         )
     ).update({"is_active": False})
+    db.flush()
+    all_checks_ok = (
+        check_data.appearance_ok and check_data.connector_ok and
+        check_data.firmware_ok and not check_data.has_bulge
+    )
     record = PreFlightCheck(
         battery_id=check_data.battery_id,
         check_time=datetime.utcnow(),
@@ -570,7 +576,7 @@ def get_capacity_trend(
                 battery_code=battery.battery_code,
                 record_date=record.test_time,
                 capacity=record.discharge_capacity,
-                cycles=battery.current_cycles
+                cycles=record.cycles_at_test
             ))
     return trend_points
 

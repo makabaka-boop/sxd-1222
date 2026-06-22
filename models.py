@@ -95,6 +95,7 @@ class DischargeRecord(Base):
     discharge_capacity = Column(Float, nullable=False)
     temperature = Column(Float, nullable=True)
     duration_minutes = Column(Integer, nullable=True)
+    cycles_at_test = Column(Integer, default=0)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

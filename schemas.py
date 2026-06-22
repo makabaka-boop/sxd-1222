@@ -161,6 +161,7 @@ class DischargeRecordResponse(BaseModel):
     discharge_capacity: float
     temperature: Optional[float] = None
     duration_minutes: Optional[int] = None
+    cycles_at_test: int = 0
     created_by: int
     created_at: datetime
 
