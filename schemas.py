@@ -15,6 +15,7 @@ class BatteryStatus(str, Enum):
     CHARGING = "充电中"
     PENDING_VERIFICATION = "待核验"
     READY_FOR_USE = "可装机"
+    IN_USE = "使用中"
     ABNORMAL_OBSERVATION = "异常观察"
     SUSPENDED = "暂停使用"
     SCRAPPED = "已报废"
@@ -292,6 +293,46 @@ class ValidationWarning(BaseModel):
     details: Optional[str] = None
 
 
+class BorrowStatus(str, Enum):
+    BORROWED = "借出中"
+    RETURNED = "已归还"
+
+
+class BorrowCreate(BaseModel):
+    battery_id: int
+    borrower: str = Field(..., max_length=100)
+    task_name: str = Field(..., max_length=200)
+    expected_return_time: datetime
+    borrow_remarks: Optional[str] = None
+
+
+class BorrowReturnCreate(BaseModel):
+    record_id: int
+    return_capacity: float = Field(..., gt=0)
+    appearance_abnormal: bool
+    return_remarks: Optional[str] = None
+
+
+class BorrowRecordResponse(BaseModel):
+    id: int
+    battery_id: int
+    borrower: str
+    task_name: str
+    expected_return_time: datetime
+    borrow_remarks: Optional[str] = None
+    borrow_status: str
+    actual_return_time: Optional[datetime] = None
+    return_capacity: Optional[float] = None
+    appearance_abnormal: Optional[bool] = None
+    return_remarks: Optional[str] = None
+    created_by: int
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
 class AnomalySource(str, Enum):
     PREFLIGHT_FAIL = "飞前核验不通过"
     TEMP_ABNORMAL = "连续温度异常"
@@ -299,6 +340,7 @@ class AnomalySource(str, Enum):
     DEACTIVATION_SUGGESTION = "停用建议"
     CYCLE_EXCEEDED = "循环超阈值"
     CAPACITY_DECAY = "容量衰减"
+    BORROW_RETURN_ABNORMAL = "借还异常"
 
 
 class AnomalyTicketStatus(str, Enum):

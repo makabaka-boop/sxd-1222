@@ -64,6 +64,29 @@ class Battery(Base):
     temperature_records = relationship("TemperatureRecord", back_populates="battery")
     reviews = relationship("ReviewRecord", back_populates="battery")
     anomaly_tickets = relationship("AnomalyTicket", back_populates="battery", foreign_keys="AnomalyTicket.battery_id")
+    borrow_records = relationship("BorrowRecord", back_populates="battery")
+
+
+class BorrowRecord(Base):
+    __tablename__ = "borrow_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    battery_id = Column(Integer, ForeignKey("batteries.id"), nullable=False)
+    borrower = Column(String(100), nullable=False)
+    task_name = Column(String(200), nullable=False)
+    expected_return_time = Column(DateTime(timezone=True), nullable=False)
+    borrow_remarks = Column(Text, nullable=True)
+    borrow_status = Column(String(20), nullable=False, default="借出中")
+    actual_return_time = Column(DateTime(timezone=True), nullable=True)
+    return_capacity = Column(Float, nullable=True)
+    appearance_abnormal = Column(Boolean, nullable=True)
+    return_remarks = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    battery = relationship("Battery", back_populates="borrow_records")
+    creator = relationship("User", foreign_keys=[created_by])
 
 
 class ChargeRecord(Base):

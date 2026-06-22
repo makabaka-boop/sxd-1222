@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from database import engine, get_db, Base
 from models import (
     User, Battery, ChargeRecord, DischargeRecord,
-    PreFlightCheck, TemperatureRecord, ReviewRecord, AnomalyTicket
+    PreFlightCheck, TemperatureRecord, ReviewRecord, AnomalyTicket,
+    BorrowRecord
 )
 from schemas import (
     UserCreate, UserUpdate, UserResponse,
@@ -23,7 +24,8 @@ from schemas import (
     CapacityTrendPoint, Token, BatteryStatus, UserRole,
     AnomalySource, AnomalyTicketStatus, SiteDisposalCreate,
     AnomalyReviewCreate, AnomalyTicketResponse, AnomalyTicketStats,
-    RiskLevel, Disposition
+    RiskLevel, Disposition, BorrowStatus,
+    BorrowCreate, BorrowReturnCreate, BorrowRecordResponse
 )
 from auth import (
     authenticate_user, create_access_token, get_current_user,
@@ -330,9 +332,13 @@ def get_battery(
     anomaly_tickets = [
         format_ticket_response(t, db) for t in anomaly_tickets_raw
     ]
+    borrow_records = db.query(BorrowRecord).filter(
+        BorrowRecord.battery_id == battery_id
+    ).order_by(BorrowRecord.created_at.desc()).all()
     return {
         "battery": battery,
-        "anomaly_tickets": anomaly_tickets
+        "anomaly_tickets": anomaly_tickets,
+        "borrow_records": borrow_records
     }
 
 
@@ -366,7 +372,7 @@ def start_charge(
     battery = db.query(Battery).filter(Battery.id == charge_data.battery_id).first()
     if not battery:
         raise HTTPException(status_code=404, detail="电池不存在")
-    if battery.status in [BatteryStatus.SCRAPPED.value, BatteryStatus.SUSPENDED.value]:
+    if battery.status in [BatteryStatus.SCRAPPED.value, BatteryStatus.SUSPENDED.value, BatteryStatus.IN_USE.value]:
         raise HTTPException(status_code=400, detail=f"电池状态为 {battery.status}，无法充电")
     active_charge = db.query(ChargeRecord).filter(
         and_(
@@ -470,6 +476,8 @@ def create_preflight_check(
     battery = db.query(Battery).filter(Battery.id == check_data.battery_id).first()
     if not battery:
         raise HTTPException(status_code=404, detail="电池不存在")
+    if battery.status == BatteryStatus.IN_USE.value:
+        raise HTTPException(status_code=400, detail="电池处于「使用中」状态，无法执行飞前核验")
     db.query(PreFlightCheck).filter(
         and_(
             PreFlightCheck.battery_id == check_data.battery_id,
@@ -785,6 +793,9 @@ def get_battery_full_history(
     anomaly_tickets = [
         format_ticket_response(t, db) for t in anomaly_tickets_raw
     ]
+    borrow_records = db.query(BorrowRecord).filter(
+        BorrowRecord.battery_id == battery_id
+    ).order_by(BorrowRecord.created_at.desc()).all()
     return {
         "battery": battery,
         "charge_records": charges,
@@ -792,7 +803,8 @@ def get_battery_full_history(
         "preflight_checks": preflights,
         "temperature_records": temperatures,
         "review_records": reviews,
-        "anomaly_tickets": anomaly_tickets
+        "anomaly_tickets": anomaly_tickets,
+        "borrow_records": borrow_records
     }
 
 
@@ -953,3 +965,116 @@ def get_anomaly_stats(
         cancelled_count=cancelled_count,
         risk_level_counts=risk_level_counts
     )
+
+
+@app.post("/api/technician/borrow", response_model=BorrowRecordResponse, tags=["机务员功能"])
+def borrow_battery(
+    data: BorrowCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.TECHNICIAN.value, UserRole.ADMIN.value))
+):
+    battery = db.query(Battery).filter(Battery.id == data.battery_id).first()
+    if not battery:
+        raise HTTPException(status_code=404, detail="电池不存在")
+    if battery.status != BatteryStatus.READY_FOR_USE.value:
+        raise HTTPException(status_code=400, detail=f"电池当前状态为 [{battery.status}]，仅「可装机」状态可借用")
+    active_borrow = db.query(BorrowRecord).filter(
+        and_(
+            BorrowRecord.battery_id == data.battery_id,
+            BorrowRecord.borrow_status == BorrowStatus.BORROWED.value
+        )
+    ).first()
+    if active_borrow:
+        raise HTTPException(status_code=400, detail="该电池已有进行中的借用记录，不可重复借用")
+    record = BorrowRecord(
+        battery_id=data.battery_id,
+        borrower=data.borrower,
+        task_name=data.task_name,
+        expected_return_time=data.expected_return_time,
+        borrow_remarks=data.borrow_remarks,
+        borrow_status=BorrowStatus.BORROWED.value,
+        created_by=current_user.id
+    )
+    battery.status = BatteryStatus.IN_USE.value
+    battery.updated_at = datetime.utcnow()
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+@app.post("/api/technician/borrow/return", response_model=BorrowRecordResponse, tags=["机务员功能"])
+def return_battery(
+    data: BorrowReturnCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.TECHNICIAN.value, UserRole.ADMIN.value))
+):
+    record = db.query(BorrowRecord).filter(BorrowRecord.id == data.record_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="借用记录不存在")
+    if record.borrow_status != BorrowStatus.BORROWED.value:
+        raise HTTPException(status_code=400, detail="该借用记录已归还，不可重复操作")
+    battery = db.query(Battery).filter(Battery.id == record.battery_id).first()
+    if not battery:
+        raise HTTPException(status_code=404, detail="关联电池不存在")
+    record.actual_return_time = datetime.utcnow()
+    record.return_capacity = data.return_capacity
+    record.appearance_abnormal = data.appearance_abnormal
+    record.return_remarks = data.return_remarks
+    record.borrow_status = BorrowStatus.RETURNED.value
+    record.updated_at = datetime.utcnow()
+    need_anomaly = False
+    anomaly_reasons = []
+    if data.appearance_abnormal:
+        need_anomaly = True
+        anomaly_reasons.append("归还时外观异常")
+    if battery.initial_capacity > 0:
+        capacity_ratio = data.return_capacity / battery.initial_capacity
+        if capacity_ratio < 0.8:
+            need_anomaly = True
+            anomaly_reasons.append(
+                f"归还时容量明显下降（当前 {data.return_capacity}mAh / 初始 {battery.initial_capacity}mAh，比率 {capacity_ratio:.1%}）"
+            )
+    if need_anomaly:
+        battery.status = BatteryStatus.ABNORMAL_OBSERVATION.value
+        create_anomaly_ticket(
+            db, battery, AnomalySource.BORROW_RETURN_ABNORMAL,
+            f"电池借还异常：{'；'.join(anomaly_reasons)}",
+            current_user.id
+        )
+    else:
+        battery.status = BatteryStatus.PENDING_CHARGE.value
+    battery.current_capacity = data.return_capacity
+    battery.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+@app.get("/api/borrow/records", response_model=List[BorrowRecordResponse], tags=["借还记录"])
+def list_borrow_records(
+    skip: int = 0,
+    limit: int = 100,
+    battery_id: Optional[int] = None,
+    borrower: Optional[str] = None,
+    task_name: Optional[str] = None,
+    borrow_status: Optional[BorrowStatus] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    query = db.query(BorrowRecord)
+    if battery_id:
+        query = query.filter(BorrowRecord.battery_id == battery_id)
+    if borrower:
+        query = query.filter(BorrowRecord.borrower.contains(borrower))
+    if task_name:
+        query = query.filter(BorrowRecord.task_name.contains(task_name))
+    if borrow_status:
+        query = query.filter(BorrowRecord.borrow_status == borrow_status.value)
+    if date_from:
+        query = query.filter(BorrowRecord.created_at >= date_from)
+    if date_to:
+        query = query.filter(BorrowRecord.created_at <= date_to)
+    return query.order_by(BorrowRecord.created_at.desc()).offset(skip).limit(limit).all()
